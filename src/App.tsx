@@ -483,7 +483,7 @@ export default function BunkerDataApp() {
                                                     <div key={unit} className="flex justify-between border-b pb-1 text-sm">
                                                         <span className="font-bold">{unit}</span>
                                                         <span className="text-blue-600 font-mono">
-                                                            {Object.values(unitBalances[unit]).reduce((a: any, b: any) => Number(a) + Number(b), 0)} פריטים
+                                                            {String(Object.values(unitBalances[unit]).reduce((a: any, b: any) => Number(a) + Number(b), 0))} פריטים
                                                         </span>
                                                     </div>
                                                 ))
