@@ -31,7 +31,7 @@ const provider = new GoogleAuthProvider();
 
 // --- TYPES ---
 export type TabType = 'ROUTINE' | 'DERIVED' | 'FUTURE';
-export type ActionType = 'ISSUE' | 'RETURN' | 'USAGE' | 'STORE' | 'RELEASE' | 'RECEIVE_SUPPLY' | 'RETURN_SUPPLY';
+export type ActionType = 'ISSUE' | 'RETURN' | 'USAGE' | 'STORE' | 'RELEASE' | 'RECEIVE_SUPPLY' | 'RETURN_SUPPLY' | 'BALANCE';
 
 const INITIAL_UNITS = ['בונקר', 'פלסר', 'פלחהן', 'פלנט', 'מסייעת', 'פלתצ', 'פלסמ'];
 
@@ -167,7 +167,7 @@ export default function BunkerDataApp() {
             }
 
             // סינון סוג פעולה
-            if (selectedAction) {
+            if (selectedAction && selectedAction !== 'BALANCE') {
                 data = data.filter((r: any) => r.type === selectedAction);
             }
 
@@ -201,30 +201,61 @@ export default function BunkerDataApp() {
     const calculateAggregateSummary = (data: any[]) => {
         const summary: any = {};
 
-        data.forEach(r => {
-            // הוסר התנאי המגביל רק ל-USAGE כדי לתמוך בכל סוגי הסינון
-            r.items?.forEach((item: any) => {
-                const sku = item.sku;
-                // אם במצב גדודי - משתמשים בשם גנרי "כלל הגדוד"
-                const unitName = isBattalionMode ? "כלל הגדוד" : (r.unit || "לא ידוע");
-                if (!sku) return;
+        // אם המשתמש בחר "מלאי נוכחי", נשתמש ב-unitBalances המחושב לכל ההיסטוריה
+        if (selectedAction === 'BALANCE') {
+            Object.keys(unitBalances).forEach(unit => {
+                // בדיקה אם היחידה נבחרה בסינון (אם יש סינון יחידות)
+                if (selectedUnits.length > 0 && !selectedUnits.includes(unit)) return;
 
-                if (selectedItems.length > 0 && !selectedItems.includes(sku) && !selectedItems.includes(item.id)) return;
+                const unitName = isBattalionMode ? "כלל הגדוד" : unit;
 
-                // מפתח האגרגציה משתנה לפי המצב
-                const key = isBattalionMode ? `battalion_${sku}` : `${unitName}_${sku}`;
+                Object.keys(unitBalances[unit]).forEach(sku => {
+                    const qty = unitBalances[unit][sku];
+                    if (qty === 0) return;
 
-                if (!summary[key]) {
-                    summary[key] = {
-                        unit: unitName,
-                        sku,
-                        itemName: item.itemName || 'פריט ללא שם',
-                        total: 0
-                    };
-                }
-                summary[key].total += (Number(item.quantity) || 0);
+                    const itemData = catalog.find((i: any) => i.id === sku || i.sku === sku);
+                    const itemName = itemData?.name || 'פריט ללא שם';
+
+                    // בדיקה אם הפריט נבחר בסינון (אם יש סינון פריטים)
+                    if (selectedItems.length > 0 && !selectedItems.includes(sku) && (!itemData || !selectedItems.includes(itemData.id))) return;
+
+                    const key = isBattalionMode ? `battalion_${sku}` : `${unitName}_${sku}`;
+
+                    if (!summary[key]) {
+                        summary[key] = {
+                            unit: unitName,
+                            sku,
+                            itemName,
+                            total: 0
+                        };
+                    }
+                    summary[key].total += qty;
+                });
             });
-        });
+        } else {
+            // לוגיקה רגילה לסוגי פעולות (סיכום תנועות בטווח הנבחר)
+            data.forEach(r => {
+                r.items?.forEach((item: any) => {
+                    const sku = item.sku;
+                    const unitName = isBattalionMode ? "כלל הגדוד" : (r.unit || "לא ידוע");
+                    if (!sku) return;
+
+                    if (selectedItems.length > 0 && !selectedItems.includes(sku) && !selectedItems.includes(item.id)) return;
+
+                    const key = isBattalionMode ? `battalion_${sku}` : `${unitName}_${sku}`;
+
+                    if (!summary[key]) {
+                        summary[key] = {
+                            unit: unitName,
+                            sku,
+                            itemName: item.itemName || 'פריט ללא שם',
+                            total: 0
+                        };
+                    }
+                    summary[key].total += (Number(item.quantity) || 0);
+                });
+            });
+        }
 
         setAggregateSummary(Object.values(summary));
     };
@@ -274,8 +305,8 @@ export default function BunkerDataApp() {
             {/* Header */}
             <header className="bg-zinc-900 text-white p-4 shadow-lg sticky top-0 z-10">
                 <div className="max-w-7xl mx-auto flex justify-between items-center text-right">
-                    <h1 className="text-2xl font-bold flex items-center gap-2">
-                        <Database className="text-orange-500" />
+                    <h1 className="text-2xl font-bold flex items-center gap-3">
+                        <img src="/logo.png" alt="Logo" className="w-10 h-10 rounded-full border-2 border-orange-500 shadow-sm" />
                         באנקר <span className="text-orange-500">נתונים</span>
                     </h1>
                     <div className="flex items-center gap-4">
@@ -391,11 +422,12 @@ export default function BunkerDataApp() {
                                         <div className="space-y-4">
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-500 mb-1">סוג פעולה</label>
-                                                <select className="w-full p-2 border rounded-lg bg-gray-50 text-sm" value={selectedAction} onChange={e => setSelectedAction(e.target.value as ActionType)}>
-                                                    <option value="">הכל (כולל ניפוק/החזרה)</option>
-                                                    <option value="USAGE">שצ"ל בלבד (USAGE)</option>
-                                                    <option value="ISSUE">ניפוק בלבד (ISSUE)</option>
-                                                    <option value="RETURN">החזרה בלבד (RETURN)</option>
+                                                <select className="w-full p-2 border rounded-lg bg-white text-sm font-bold shadow-sm" value={selectedAction} onChange={e => setSelectedAction(e.target.value as ActionType)}>
+                                                    <option value="BALANCE">📦 מלאי נוכחי (מאזן)</option>
+                                                    <option value="USAGE">🔥 צריכה - שצ"ל (USAGE)</option>
+                                                    <option value="ISSUE">📤 ניפוקים (ISSUE)</option>
+                                                    <option value="RETURN">📥 החזרות (RETURN)</option>
+                                                    <option value="">🔍 הכל (ללא סינון סוג)</option>
                                                 </select>
                                             </div>
                                             <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-100 rounded-lg cursor-pointer hover:bg-blue-100 transition-colors">
