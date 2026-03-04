@@ -12,6 +12,7 @@ import {
     ArrowRightLeft, TrendingUp, AlertTriangle, PackageOpen,
     LogIn, LogOut, User, ClipboardCheck
 } from 'lucide-react';
+import { analyzeWithAI } from './services/aiService';
 
 // --- FIREBASE CONFIGURATION (Same as Bunker) ---
 const firebaseConfig = {
@@ -51,6 +52,9 @@ export default function BunkerDataApp() {
     const [dateStart, setDateStart] = useState('');
     const [dateEnd, setDateEnd] = useState('');
     const [isBattalionMode, setIsBattalionMode] = useState(false);
+    const [searchMode, setSearchMode] = useState<'MANUAL' | 'AI'>('MANUAL');
+    const [aiQuery, setAiQuery] = useState('');
+    const [aiResult, setAiResult] = useState<{ reasoning: string, answer: string, data: any[] } | null>(null);
 
     // מצבי חישוב (Derived/Aggregate State)
     const [unitBalances, setUnitBalances] = useState<any>({});
@@ -194,6 +198,35 @@ export default function BunkerDataApp() {
         } catch (e) {
             console.error("Search error", e);
             alert("שגיאה בטעינת נתונים");
+        }
+        setLoading(false);
+    };
+
+    const handleAISearch = async () => {
+        if (!aiQuery) return;
+        setLoading(true);
+        setAiResult(null);
+
+        try {
+            const result = await analyzeWithAI(aiQuery, catalog, INITIAL_UNITS);
+
+            // עדכון הפילטרים המקומיים על בסיס ה-AI
+            if (result.filters.units) setSelectedUnits(result.filters.units);
+            if (result.filters.items) setSelectedItems(result.filters.items);
+            if (result.filters.action) setSelectedAction(result.filters.action as ActionType);
+            if (result.filters.isBattalionMode !== undefined) setIsBattalionMode(result.filters.isBattalionMode);
+
+            // הרצת החיפוש האמיתי על הנתונים
+            await handleSearch();
+
+            setAiResult({
+                reasoning: result.reasoning,
+                answer: result.answer,
+                data: receipts // ה-receipts כבר מעודכנים אחרי handleSearch
+            });
+        } catch (e) {
+            console.error("AI Search error", e);
+            alert("שגיאה בניתוח הנתונים");
         }
         setLoading(false);
     };
@@ -377,95 +410,208 @@ export default function BunkerDataApp() {
                         {activeTab === 'ROUTINE' && (
                             <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-500">
                                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                                    <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-gray-800"><Filter size={20} /> סינון וחיפוש (עבור תשובה סופית)</h2>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                                        {/* בחירת יחידות */}
-                                        <div className="space-y-2">
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">בחר פלוגות/יחידות</label>
-                                            <div className="max-h-40 overflow-y-auto border rounded-lg p-2 bg-gray-50 space-y-1">
-                                                {INITIAL_UNITS.map(u => (
-                                                    <label key={u} className="flex items-center gap-2 p-1 hover:bg-gray-100 rounded cursor-pointer transition-colors">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={selectedUnits.includes(u)}
-                                                            onChange={() => toggleSelection(selectedUnits, setSelectedUnits, u)}
-                                                            className="w-4 h-4 text-orange-600 rounded"
-                                                        />
-                                                        <span className="text-sm">{u}</span>
-                                                    </label>
-                                                ))}
-                                            </div>
-                                            <div className="text-[10px] text-gray-400">נבחרו: {selectedUnits.length}</div>
-                                        </div>
-
-                                        {/* בחירת פריטים */}
-                                        <div className="space-y-2">
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">בחר פריטים (מק"טים)</label>
-                                            <div className="max-h-40 overflow-y-auto border rounded-lg p-2 bg-gray-50 space-y-1">
-                                                {catalog.map(c => (
-                                                    <label key={c.id} className="flex items-center gap-2 p-1 hover:bg-gray-100 rounded cursor-pointer transition-colors">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={selectedItems.includes(c.id) || selectedItems.includes(c.sku)}
-                                                            onChange={() => toggleSelection(selectedItems, setSelectedItems, c.sku || c.id)}
-                                                            className="w-4 h-4 text-orange-600 rounded"
-                                                        />
-                                                        <span className="text-sm truncate" title={c.name}>{c.name}</span>
-                                                    </label>
-                                                ))}
-                                            </div>
-                                            <div className="text-[10px] text-gray-400">נבחרו: {selectedItems.length}</div>
-                                        </div>
-
-                                        {/* סוג פעולה ותאריכים */}
-                                        <div className="space-y-4">
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-500 mb-1">סוג פעולה</label>
-                                                <select className="w-full p-2 border rounded-lg bg-white text-sm font-bold shadow-sm" value={selectedAction} onChange={e => setSelectedAction(e.target.value as ActionType)}>
-                                                    <option value="BALANCE">📦 מלאי נוכחי (מאזן)</option>
-                                                    <option value="USAGE">🔥 צריכה - שצ"ל (USAGE)</option>
-                                                    <option value="ISSUE">📤 ניפוקים (ISSUE)</option>
-                                                    <option value="RETURN">📥 החזרות (RETURN)</option>
-                                                    <option value="">🔍 הכל (ללא סינון סוג)</option>
-                                                </select>
-                                            </div>
-                                            <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-100 rounded-lg cursor-pointer hover:bg-blue-100 transition-colors">
-                                                <input
-                                                    type="checkbox"
-                                                    id="battalionMode"
-                                                    checked={isBattalionMode}
-                                                    onChange={(e) => setIsBattalionMode(e.target.checked)}
-                                                    className="w-4 h-4 text-blue-600 rounded cursor-pointer"
-                                                />
-                                                <label htmlFor="battalionMode" className="text-xs font-bold text-blue-800 cursor-pointer select-none">סיכום גדודי כולל (ללא פלוגות)</label>
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-2">
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-500 mb-1">מתאריך</label>
-                                                    <input type="date" className="w-full p-1.5 border rounded-lg bg-gray-50 text-xs" value={dateStart} onChange={e => setDateStart(e.target.value)} />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-500 mb-1">עד תאריך</label>
-                                                    <input type="date" className="w-full p-1.5 border rounded-lg bg-gray-50 text-xs" value={dateEnd} onChange={e => setDateEnd(e.target.value)} />
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* כפתורי פעולה */}
-                                        <div className="flex flex-col gap-2 justify-end">
-                                            <button onClick={handleSearch} className="w-full bg-zinc-900 hover:bg-zinc-800 text-white py-3 rounded-xl font-bold flex justify-center items-center gap-2 shadow-lg transition-all transform active:scale-95">
-                                                <Search size={20} /> בצע חתך נתונים
+                                    <div className="flex justify-between items-center mb-6 border-b pb-4">
+                                        <h2 className="text-lg font-bold flex items-center gap-2 text-gray-800">
+                                            {searchMode === 'MANUAL' ? <Filter size={20} /> : <Search size={20} className="text-purple-600" />}
+                                            {searchMode === 'MANUAL' ? 'סינון וחיפוש ידני' : 'חיפוש AI חכם'}
+                                        </h2>
+                                        <div className="flex bg-gray-100 p-1 rounded-lg">
+                                            <button
+                                                onClick={() => setSearchMode('MANUAL')}
+                                                className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${searchMode === 'MANUAL' ? 'bg-white shadow-sm text-zinc-900' : 'text-gray-500 hover:text-gray-700'}`}
+                                            >
+                                                שיטה רגילה
                                             </button>
-                                            <button onClick={handleExportToExcel} className="w-full bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded-lg font-bold text-sm flex justify-center items-center gap-2 border border-green-200 transition-colors">
-                                                <FileDown size={18} /> הורד דוח לאקסל
+                                            <button
+                                                onClick={() => setSearchMode('AI')}
+                                                className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${searchMode === 'AI' ? 'bg-zinc-900 text-white shadow-lg' : 'text-gray-500 hover:text-gray-700'}`}
+                                            >
+                                                חיפוש חופשי (AI)
                                             </button>
                                         </div>
                                     </div>
+
+                                    {searchMode === 'MANUAL' ? (
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in duration-300">
+                                            {/* בחירת יחידות */}
+                                            <div className="space-y-2">
+                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">בחר פלוגות/יחידות</label>
+                                                <div className="max-h-40 overflow-y-auto border rounded-lg p-2 bg-gray-50 space-y-1">
+                                                    {INITIAL_UNITS.map(u => (
+                                                        <label key={u} className="flex items-center gap-2 p-1 hover:bg-gray-100 rounded cursor-pointer transition-colors">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedUnits.includes(u)}
+                                                                onChange={() => toggleSelection(selectedUnits, setSelectedUnits, u)}
+                                                                className="w-4 h-4 text-orange-600 rounded"
+                                                            />
+                                                            <span className="text-sm">{u}</span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <div className="text-[10px] text-gray-400">נבחרו: {selectedUnits.length}</div>
+                                            </div>
+
+                                            {/* בחירת פריטים */}
+                                            <div className="space-y-2">
+                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">בחר פריטים (מק"טים)</label>
+                                                <div className="max-h-40 overflow-y-auto border rounded-lg p-2 bg-gray-50 space-y-1">
+                                                    {catalog.map(c => (
+                                                        <label key={c.id} className="flex items-center gap-2 p-1 hover:bg-gray-100 rounded cursor-pointer transition-colors">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedItems.includes(c.id) || selectedItems.includes(c.sku)}
+                                                                onChange={() => toggleSelection(selectedItems, setSelectedItems, c.sku || c.id)}
+                                                                className="w-4 h-4 text-orange-600 rounded"
+                                                            />
+                                                            <span className="text-sm truncate" title={c.name}>{c.name}</span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <div className="text-[10px] text-gray-400">נבחרו: {selectedItems.length}</div>
+                                            </div>
+
+                                            {/* סוג פעולה ותאריכים */}
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <label className="block text-xs font-bold text-gray-500 mb-1">סוג פעולה</label>
+                                                    <select className="w-full p-2 border rounded-lg bg-white text-sm font-bold shadow-sm" value={selectedAction} onChange={e => setSelectedAction(e.target.value as ActionType)}>
+                                                        <option value="BALANCE">📦 מלאי נוכחי (מאזן)</option>
+                                                        <option value="USAGE">🔥 צריכה - שצ"ל (USAGE)</option>
+                                                        <option value="ISSUE">📤 ניפוקים (ISSUE)</option>
+                                                        <option value="RETURN">📥 החזרות (RETURN)</option>
+                                                        <option value="">🔍 הכל (ללא סינון סוג)</option>
+                                                    </select>
+                                                </div>
+                                                <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-100 rounded-lg cursor-pointer hover:bg-blue-100 transition-colors">
+                                                    <input
+                                                        type="checkbox"
+                                                        id="battalionMode"
+                                                        checked={isBattalionMode}
+                                                        onChange={(e) => setIsBattalionMode(e.target.checked)}
+                                                        className="w-4 h-4 text-blue-600 rounded cursor-pointer"
+                                                    />
+                                                    <label htmlFor="battalionMode" className="text-xs font-bold text-blue-800 cursor-pointer select-none">סיכום גדודי כולל (ללא פלוגות)</label>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 mb-1">מתאריך</label>
+                                                        <input type="date" className="w-full p-1.5 border rounded-lg bg-gray-50 text-xs" value={dateStart} onChange={e => setDateStart(e.target.value)} />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 mb-1">עד תאריך</label>
+                                                        <input type="date" className="w-full p-1.5 border rounded-lg bg-gray-50 text-xs" value={dateEnd} onChange={e => setDateEnd(e.target.value)} />
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-col gap-2 justify-end">
+                                                <button onClick={handleSearch} className="w-full bg-zinc-900 hover:bg-zinc-800 text-white py-3 rounded-xl font-bold flex justify-center items-center gap-2 shadow-lg transition-all transform active:scale-95">
+                                                    <Search size={20} /> בצע חתך נתונים
+                                                </button>
+                                                <button onClick={handleExportToExcel} className="w-full bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded-lg font-bold text-sm flex justify-center items-center gap-2 border border-green-200 transition-colors">
+                                                    <FileDown size={18} /> הורד דוח לאקסל
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                            <div className="relative">
+                                                <textarea
+                                                    className="w-full p-4 border-2 border-purple-100 rounded-2xl bg-purple-50/30 text-sm focus:border-purple-500 focus:ring-0 transition-all min-h-[120px] resize-none"
+                                                    placeholder="כתוב מה אתה רוצה למצוא או לנתח... (למשל: 'מה המלאי של פלסר?' או 'חשב אורך נשימה של קליעי 5.56')"
+                                                    value={aiQuery}
+                                                    onChange={(e) => setAiQuery(e.target.value)}
+                                                />
+                                                <div className="absolute bottom-4 left-4 text-[10px] text-purple-400 font-bold">מופעל על ידי Gemini AI</div>
+                                            </div>
+                                            <button
+                                                disabled={!aiQuery || loading}
+                                                onClick={handleAISearch}
+                                                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white py-3 rounded-xl font-bold flex justify-center items-center gap-2 shadow-lg transition-all transform active:scale-95"
+                                            >
+                                                {loading ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <TrendingUp size={20} />}
+                                                נתח נתונים בשפה חופשית
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
 
-                                {/* SECTION: THE "FINAL ANSWER" SUMMARY */}
-                                {aggregateSummary.length > 0 ? (
+                                {/* SECTION: AI RESULTS */}
+                                {searchMode === 'AI' && aiResult && (
+                                    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                        {/* Reasoning & Answer */}
+                                        <div className="bg-gradient-to-br from-purple-700 to-indigo-900 text-white p-8 rounded-3xl shadow-2xl relative overflow-hidden">
+                                            <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -mr-20 -mt-20 blur-3xl"></div>
+                                            <div className="relative z-10">
+                                                <div className="flex items-center gap-3 mb-6">
+                                                    <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md border border-white/20">
+                                                        <TrendingUp size={28} className="text-purple-200" />
+                                                    </div>
+                                                    <div>
+                                                        <h2 className="text-2xl font-black tracking-tight">תובנות בינה מלאכותית</h2>
+                                                        <p className="text-purple-200 text-xs font-bold uppercase tracking-widest">{aiResult.reasoning}</p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-8 rounded-2xl mb-6">
+                                                    <div className="text-xs font-bold text-purple-200 uppercase mb-2">תשובה סופית</div>
+                                                    <div className="text-4xl font-black text-white leading-tight whitespace-pre-wrap">
+                                                        {aiResult.answer}
+                                                    </div>
+                                                </div>
+
+                                                <button
+                                                    onClick={handleExportToExcel}
+                                                    className="bg-white text-purple-900 px-6 py-3 rounded-xl font-black text-sm flex items-center gap-2 hover:bg-purple-50 transition-all shadow-xl active:scale-95"
+                                                >
+                                                    <FileDown size={20} /> הורד נתוני גיבוי לאקסל
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Detailed Table (Optional display) */}
+                                        {aiResult.data.length > 0 && (
+                                            <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+                                                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                                    <Database size={18} className="text-gray-400" /> פירוט ונתונים לתצוגה
+                                                </h3>
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-sm text-right">
+                                                        <thead>
+                                                            <tr className="border-b text-gray-500">
+                                                                <th className="py-2 px-4">תאריך</th>
+                                                                <th className="py-2 px-4">יחידה</th>
+                                                                <th className="py-2 px-4">סוג</th>
+                                                                <th className="py-2 px-4">פריטים</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {aiResult.data.slice(0, 10).map((r, i) => (
+                                                                <tr key={i} className="border-b hover:bg-gray-50">
+                                                                    <td className="py-2 px-4 text-xs">{r.timestampStr}</td>
+                                                                    <td className="py-2 px-4 font-bold">{r.unit}</td>
+                                                                    <td className="py-2 px-4 text-xs">{r.type}</td>
+                                                                    <td className="py-2 px-4 text-[10px]">
+                                                                        {r.items?.map((it: any) => `${it.itemName} (${it.quantity})`).join(', ')}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                    {aiResult.data.length > 10 && (
+                                                        <div className="text-center p-2 text-xs text-gray-400 font-bold">
+                                                            מציג 10 מתוך {aiResult.data.length} רשומות... (הורד אקסל לפירוט מלא)
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* SECTION: THE "FINAL ANSWER" SUMMARY (Original Manual results) */}
+                                {searchMode === 'MANUAL' && aggregateSummary.length > 0 ? (
                                     <div className="bg-gradient-to-r from-zinc-900 to-zinc-800 text-white p-6 rounded-2xl shadow-xl border-l-8 border-orange-500 animate-in fade-in zoom-in duration-300">
                                         <div className="flex items-center gap-3 mb-4">
                                             <div className="bg-orange-500 p-2 rounded-lg"><ClipboardCheck size={24} /></div>
