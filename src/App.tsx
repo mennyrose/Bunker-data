@@ -37,9 +37,14 @@ interface InventoryRecord { sku: string; unitId: string; onHand: number; inStora
 interface SerializedItem { sku: string; serialNumber: string; owner: string; location: string; status: 'active' | 'used' | 'defect'; }
 
 // --- CONSTANTS (must match the Bunker app) ---
-const BUNKERS = ['בונקר עין זיתים', 'בונקר אביבים'];
+const LINE_BUNKER = 'בונקר קווי';
+const BUNKERS = ['בונקר עין זיתים', 'בונקר אביבים', LINE_BUNKER];
 const COMPANIES = ['א', 'ב', 'ג', 'מסייעת', 'פלתצ', 'פלסמ'];
 const INITIAL_UNITS = [...BUNKERS, ...COMPANIES];
+// Column order of the stock table (same as Bunker): אביבים, companies, line bunker | total | עין זיתים
+const UNITS_BEFORE_TOTAL = ['בונקר אביבים', ...COMPANIES, LINE_BUNKER];
+const UNITS_AFTER_TOTAL = ['בונקר עין זיתים'];
+const TABLE_UNITS = [...UNITS_BEFORE_TOTAL, ...UNITS_AFTER_TOTAL];
 const DEFAULT_BUNKER = 'בונקר אביבים';
 const SUPPLIER_UNIT = 'חטיבה';
 
@@ -300,8 +305,8 @@ export default function BunkerDataApp() {
         stockByUnit[rec.sku][rec.unitId] = rec;
     });
     const stockRows = catalog.map(c => {
-        const per = INITIAL_UNITS.map(u => stockByUnit[c.id]?.[u]?.onHand || 0);
-        const stored = INITIAL_UNITS.map(u => stockByUnit[c.id]?.[u]?.inStorage || 0);
+        const per = TABLE_UNITS.map(u => stockByUnit[c.id]?.[u]?.onHand || 0);
+        const stored = TABLE_UNITS.map(u => stockByUnit[c.id]?.[u]?.inStorage || 0);
         const total = per.reduce((a, b) => a + b, 0) + stored.reduce((a, b) => a + b, 0);
         return { c, per, stored, total };
     }).filter(r => !onlyInStock || r.total > 0).sort((a, b) => (a.c.family || '').localeCompare(b.c.family || '') || a.c.name.localeCompare(b.c.name));
@@ -626,14 +631,15 @@ export default function BunkerDataApp() {
                                     <div className="overflow-auto max-h-[60vh]">
                                         <table className="w-full text-sm text-right whitespace-nowrap">
                                             <thead className="bg-zinc-100 text-xs sticky top-0">
-                                                <tr><th className="p-2 sticky right-0 bg-zinc-100">פריט</th><th className="p-2 text-center bg-blue-50">סה"כ</th>{INITIAL_UNITS.map(u => <th key={u} className="p-2 text-center">{u}</th>)}</tr>
+                                                <tr><th className="p-2 sticky right-0 bg-zinc-100">פריט</th>{UNITS_BEFORE_TOTAL.map(u => <th key={u} className="p-2 text-center">{u}</th>)}<th className="p-2 text-center bg-blue-50">סה"כ בגדוד</th>{UNITS_AFTER_TOTAL.map(u => <th key={u} className="p-2 text-center">{u}</th>)}</tr>
                                             </thead>
                                             <tbody className="divide-y">
                                                 {stockRows.map(({ c, per, stored, total }) => (
                                                     <tr key={c.id}>
                                                         <td className="p-2 font-bold sticky right-0 bg-white">{c.name}</td>
+                                                        {per.slice(0, UNITS_BEFORE_TOTAL.length).map((n, i) => <td key={i} className={`p-2 text-center ${!n && !stored[i] ? 'text-zinc-200' : ''}`}><div className="font-bold">{n || '-'}</div>{stored[i] > 0 && <div className="text-[10px] text-purple-600">🔒{stored[i]}</div>}</td>)}
                                                         <td className="p-2 text-center font-bold bg-blue-50">{total || '-'}</td>
-                                                        {per.map((n, i) => <td key={i} className={`p-2 text-center ${!n && !stored[i] ? 'text-zinc-200' : ''}`}><div className="font-bold">{n || '-'}</div>{stored[i] > 0 && <div className="text-[10px] text-purple-600">🔒{stored[i]}</div>}</td>)}
+                                                        {per.slice(UNITS_BEFORE_TOTAL.length).map((n, j) => { const i = UNITS_BEFORE_TOTAL.length + j; return <td key={i} className={`p-2 text-center ${!n && !stored[i] ? 'text-zinc-200' : ''}`}><div className="font-bold">{n || '-'}</div>{stored[i] > 0 && <div className="text-[10px] text-purple-600">🔒{stored[i]}</div>}</td>; })}
                                                     </tr>
                                                 ))}
                                             </tbody>
