@@ -101,6 +101,7 @@ export default function BunkerDataApp() {
     // Data
     const [catalog, setCatalog] = useState<CatalogItem[]>([]);
     const [receipts, setReceipts] = useState<any[]>([]);
+    const [cancelledReceipts, setCancelledReceipts] = useState<any[]>([]); // kept apart: never counted in the totals
     const [inventory, setInventory] = useState<InventoryRecord[] | null>(null);
     const [usageReceipts, setUsageReceipts] = useState<any[] | null>(null);
 
@@ -228,7 +229,7 @@ export default function BunkerDataApp() {
                     summary[key].total += rec.onHand || 0;
                     summary[key].storage += rec.inStorage || 0;
                 });
-                setReceipts([]);
+                setReceipts([]); setCancelledReceipts([]);
             } else {
                 const constraints: any[] = [orderBy("timestamp", "desc")];
                 if (dateStart) constraints.unshift(where("timestamp", ">=", Timestamp.fromDate(new Date(dateStart + 'T00:00:00'))));
@@ -239,6 +240,9 @@ export default function BunkerDataApp() {
                 if (selectedUnits.length > 0) data = data.filter(r => selectedUnits.includes(r.unit));
                 if (selectedAction) data = data.filter(r => r.type === selectedAction);
                 if (selectedItems.length > 0) data = data.filter(r => r.items?.some((i: any) => selectedItems.includes(i.sku)));
+                // Cancelled receipts stay visible in their own list but are never added up
+                setCancelledReceipts(data.filter(r => r.status === 'CANCELLED'));
+                data = data.filter(r => r.status !== 'CANCELLED');
                 data.forEach(r => {
                     r.items?.forEach((item: any) => {
                         if (!itemSelected(item.sku)) return;
@@ -289,7 +293,7 @@ export default function BunkerDataApp() {
             if (!XLSX) { alert("ספריית האקסל לא נטענה כראוי"); return; }
             const rows = serialResult.events.map(r => {
                 const m = describeMove(r);
-                return { 'תאריך': fmtDateTime(r.timestamp), 'קבלה': r.number, 'פעולה': actionLabel(r.type), 'מ': m.from, 'ל': m.to, 'מנפק/מבצע': r.issuerName || '', 'מקבל': r.receiverName || '', 'אירוע': r.eventName || '' };
+                return { 'תאריך': fmtDateTime(r.timestamp), 'קבלה': r.number, 'פעולה': actionLabel(r.type), 'סטטוס': r.status === 'CANCELLED' ? 'מבוטלת' : 'פעילה', 'מ': m.from, 'ל': m.to, 'מנפק/מבצע': r.issuerName || '', 'מקבל': r.receiverName || '', 'אירוע': r.eventName || '' };
             });
             const ws = XLSX.utils.json_to_sheet(rows);
             const wb = XLSX.utils.book_new();
@@ -312,7 +316,7 @@ export default function BunkerDataApp() {
     }).filter(r => !onlyInStock || r.total > 0).sort((a, b) => (a.c.family || '').localeCompare(b.c.family || '') || a.c.name.localeCompare(b.c.name));
 
     const usageByUnit: Record<string, number> = {};
-    (usageReceipts || []).forEach(r => { r.items?.forEach((i: any) => { usageByUnit[r.unit] = (usageByUnit[r.unit] || 0) + (Number(i.quantity) || 0); }); });
+    (usageReceipts || []).filter(r => r.status !== 'CANCELLED').forEach(r => { r.items?.forEach((i: any) => { usageByUnit[r.unit] = (usageByUnit[r.unit] || 0) + (Number(i.quantity) || 0); }); });
     const benchmarkingData = Object.entries(usageByUnit).map(([name, usage]) => ({ name, usage })).sort((a, b) => b.usage - a.usage);
 
     const tabBtn = (id: TabType, label: string, Icon: any, color: string) => (
@@ -415,7 +419,7 @@ export default function BunkerDataApp() {
                                             {serialResult.docs.length === 0 ? (
                                                 <div className="text-sm text-gray-500 flex items-center gap-2"><AlertTriangle size={16} className="text-yellow-500" /> הצ' לא קיים כרגע במערכת (ייתכן שנמחק, או שמעולם לא נקלט).</div>
                                             ) : serialResult.docs.map((d, i) => {
-                                                const itemEvents = serialResult.events.filter(r => r.items?.some((it: any) => it.sku === d.sku && it.serials?.includes(d.serialNumber)));
+                                                const itemEvents = serialResult.events.filter(r => r.status !== 'CANCELLED' && r.items?.some((it: any) => it.sku === d.sku && it.serials?.includes(d.serialNumber)));
                                                 const last = itemEvents[itemEvents.length - 1];
                                                 const exp = last ? expectedAfter(last) : null;
                                                 const mismatch = exp && ((exp.owner && exp.owner !== d.owner) || (exp.location && exp.location !== d.location) || (exp.status && exp.status !== d.status));
@@ -454,10 +458,10 @@ export default function BunkerDataApp() {
                                                         const m = describeMove(r);
                                                         const itemNames = (r.items || []).filter((it: any) => it.serials?.includes(serialResult.serial)).map((it: any) => it.itemName).join(', ');
                                                         return (
-                                                            <div key={r.id} className="relative bg-gray-50 border rounded-lg p-3">
+                                                            <div key={r.id} className={`relative border rounded-lg p-3 ${r.status === 'CANCELLED' ? 'bg-red-50 border-red-200 opacity-75' : 'bg-gray-50'}`}>
                                                                 <div className="absolute -right-[25px] top-4 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></div>
                                                                 <div className="flex justify-between items-start flex-wrap gap-1">
-                                                                    <div className="font-bold">{actionLabel(r.type)} <span className="text-xs text-gray-500 font-normal">({itemNames})</span></div>
+                                                                    <div className={`font-bold ${r.status === 'CANCELLED' ? 'line-through' : ''}`}>{actionLabel(r.type)} <span className="text-xs text-gray-500 font-normal">({itemNames})</span>{r.status === 'CANCELLED' && <span className="mr-2 text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded no-underline">מבוטלת, לא נספרת</span>}</div>
                                                                     <div className="text-xs text-gray-500">{fmtDateTime(r.timestamp)} · קבלה #{r.number}</div>
                                                                 </div>
                                                                 <div className="text-sm mt-1"><span className="font-bold">{m.from}</span> ← <span className="font-bold">{m.to}</span></div>
@@ -548,6 +552,20 @@ export default function BunkerDataApp() {
                                         </div>
                                     </div>
                                 </div>
+
+                                {cancelledReceipts.length > 0 && (
+                                    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                                        <h3 className="font-bold text-red-800 mb-1">קבלות מבוטלות בטווח ({cancelledReceipts.length})</h3>
+                                        <p className="text-xs text-red-700 mb-3">הקבלות האלה לא נספרו בסיכום למעלה. הן נשמרות במערכת לצורך תיעוד בלבד.</p>
+                                        <div className="overflow-x-auto"><table className="w-full text-xs text-right"><thead><tr className="text-red-800"><th className="p-2">תאריך</th><th className="p-2">קבלה</th><th className="p-2">פעולה</th><th className="p-2">יחידה</th><th className="p-2">פריטים</th><th className="p-2">בוטלה</th></tr></thead><tbody>
+                                            {cancelledReceipts.map(r => (
+                                                <tr key={r.id} className="border-t border-red-100"><td className="p-2 whitespace-nowrap">{fmtDate(r.timestamp)}</td><td className="p-2">#{r.number}</td><td className="p-2">{actionLabel(r.type)}</td><td className="p-2 font-bold">{r.unit}</td>
+                                                    <td className="p-2 line-through text-zinc-500">{(r.items || []).map((i: any) => `${i.itemName} x${i.quantity}`).join(', ')}</td>
+                                                    <td className="p-2 whitespace-nowrap">{r.cancelledAt?.seconds ? fmtDate(r.cancelledAt) : ''}{r.cancelledBy ? ` · ${r.cancelledBy}` : ''}</td></tr>
+                                            ))}
+                                        </tbody></table></div>
+                                    </div>
+                                )}
 
                                 {aggregateSummary.length > 0 ? (
                                     <div className="bg-gradient-to-r from-zinc-900 to-zinc-800 text-white p-6 rounded-2xl shadow-xl border-l-8 border-orange-500">
